@@ -635,6 +635,8 @@ class PeriodicSubscriptionCost:
     subtotal: Decimal
     total: Decimal
     price_id: str
+    price_name: str
+    billable_metric_id: Optional[str]
     grouped_costs_json: str
 
     def serialize(self):
@@ -645,6 +647,11 @@ class PeriodicSubscriptionCost:
             "subtotal": self.subtotal,
             "total": self.total,
             "price_id": self.price_id,
+            "price": {
+                "id": self.price_id,
+                "name": self.price_name,
+                "billable_metric_id": self.billable_metric_id,
+            },
             "grouped_costs_json": self.grouped_costs_json,
         }
 
@@ -953,6 +960,8 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
                         subtotal=price_cost["subtotal"],
                         total=price_cost["total"],
                         price_id=price_cost["price"]["id"],
+                        price_name=price_cost["price"]["name"],
+                        billable_metric_id=price_cost["price"]["billable_metric"]["id"] if price_cost["price"]["billable_metric"] is not None else None,
                         grouped_costs_json=json.dumps(price_cost["price_groups"]),
                     )
                     response.add_resource(psc)
