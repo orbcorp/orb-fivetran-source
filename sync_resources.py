@@ -920,21 +920,25 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
     The size of the timeframe is determined by the `COSTS_TIMEFRAME_WINDOW` constant.
     """
 
-    def fetch_subscription_ids(self, subscription_pagination_cursor: Optional[str]) -> Tuple[List[str], SimplePaginationCursor]:
+    def fetch_subscriptions(self, subscription_pagination_cursor: Optional[str]) -> Tuple[List[Any], SimplePaginationCursor]:
         parent_resources, all_slices_cursor = self.fetch_resources_from_path(
             "subscriptions", pagination_cursor=subscription_pagination_cursor
         )
-        return list(map(lambda resource: resource["id"], parent_resources)), all_slices_cursor
+        return parent_resources, all_slices_cursor
 
     def fetch_after_cursor(self, initial_cursor: SubscriptionCostsCursor) -> AbstractResourceFetchResponse[SubscriptionCostsCursor]:
         response = SubscriptionCostsFetchResponse.init_with_cursor(initial_cursor, resource_config=self.resource_config)
         timeframe_start = initial_cursor.current_timeframe_start
         timeframe_end = initial_cursor.current_timeframe_end
 
-        (subscription_ids, subscription_pagination_cursor) = self.fetch_subscription_ids(
+        (subscriptions, subscription_pagination_cursor) = self.fetch_subscriptions(
             initial_cursor.current_subscriptions_pagination_cursor
         )
-        for subscription_id in subscription_ids:
+        for subscription in subscriptions:
+            subscription_id = subscription['id']
+            if subscription["status"] == "upcoming":
+                logger.info("Skipping upcoming subscription: %s", subscription_id)
+                continue
             one_month_costs = req_session.get(
                 BASE_ORB_API_URL + f"subscriptions/{subscription_id}/costs",
                 headers=self.auth_header,
