@@ -1060,6 +1060,16 @@ def lambda_handler(req, context):
 
     state = FunctionState.from_serialized_state(req.get("state"))
 
+    # A comma-delimited string of resource names to exclude from the sync.
+    excluded_resources_str = secrets.get("excluded_resources", None)
+    excluded_resources = []
+    if excluded_resources_str:
+        excluded_resources = [x.strip() for x in excluded_resources_str.split(',')]
+        logger.info(f"Excluding resources: {excluded_resources}")
+        for resource in excluded_resources:
+            if resource not in RESOURCE_TO_RESOURCE_CONFIG.keys():
+                raise Exception(f"Excluded resource {resource} is not a valid resource name.")
+
     has_more = False
     collected_resources: Dict = {}
 
@@ -1085,6 +1095,9 @@ def lambda_handler(req, context):
     for resource, resource_config in RESOURCE_TO_RESOURCE_CONFIG.items():
         if resource not in streams_to_invoke:
             logger.info(f"Skipping {resource} resource because this is a paginated invocation, and this resource is exhausted.")
+            continue
+        if resource in excluded_resources:
+            logger.info(f"Skipping {resource} resource because it is specified to be excluded.")
             continue
         fetcher_type = fetcher_for_resource_config(resource_config)
         fetcher: AbstractResourceFetcher = fetcher_type(authorization_header=authorization_header, resource_config=resource_config)
