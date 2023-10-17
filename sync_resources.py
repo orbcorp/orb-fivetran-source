@@ -430,10 +430,7 @@ def fetcher_for_resource_config(resource_config) -> Type[AbstractResourceFetcher
 class FunctionState:
     customer_cursor: AbstractCursor
     plan_cursor: AbstractCursor
-    # This cursor only applies to issued invoices.
-    # We always sync all draft invoices available.
     invoice_cursor: AbstractCursor
-    draft_invoice_cursor: AbstractCursor
     subscription_cursor: AbstractCursor
     subscription_version_cursor: AbstractCursor
     subscription_costs_cursor: AbstractCursor
@@ -445,7 +442,6 @@ class FunctionState:
             "customer": self.customer_cursor.serialize(),
             "plan": self.plan_cursor.serialize(),
             "invoice": self.invoice_cursor.serialize(),
-            "draft_invoice": self.draft_invoice_cursor.serialize(),
             "subscription": self.subscription_cursor.serialize(),
             "subscription_version": self.subscription_version_cursor.serialize(),
             "credit_ledger_entry": self.credit_ledger_entry_cursor.serialize(),
@@ -460,7 +456,6 @@ class FunctionState:
                 customer_cursor=Cursor.min(),
                 plan_cursor=Cursor.min(),
                 invoice_cursor=Cursor.min(),
-                draft_invoice_cursor=Cursor.min(),
                 subscription_cursor=Cursor.min(),
                 subscription_version_cursor=Cursor.min(),
                 credit_ledger_entry_cursor=CursorWithSlices.min(),
@@ -485,7 +480,6 @@ class FunctionState:
                 plan_cursor=maybe_deserialize_resource_state(state, "plan"),
                 invoice_cursor=maybe_deserialize_resource_state(state, "invoice"),
                 subscription_cursor=maybe_deserialize_resource_state(state, "subscription"),
-                draft_invoice_cursor=maybe_deserialize_resource_state(state, "draft_invoice"),
                 subscription_version_cursor=maybe_deserialize_resource_state(state, "subscription_version"),
                 credit_ledger_entry_cursor=maybe_deserialize_nested_resource_state(state, "credit_ledger_entry"),
                 subscription_costs_cursor=SubscriptionCostsCursor.maybe_deserialize_state(state),
@@ -501,8 +495,6 @@ class FunctionState:
             return self.subscription_cursor
         elif resource == "issued_invoice":
             return self.invoice_cursor
-        elif resource == "draft_invoice":
-            return self.draft_invoice_cursor
         elif resource == "subscription_version":
             return self.subscription_version_cursor
         elif resource == "credit_ledger_entry":
@@ -522,8 +514,6 @@ class FunctionState:
             self.plan_cursor = cursor
         elif resource == "issued_invoice":
             self.invoice_cursor = cursor
-        elif resource == "draft_invoice":
-            self.draft_invoice_cursor = cursor
         elif resource == "subscription_version":
             self.subscription_version_cursor = cursor
         elif resource == "credit_ledger_entry":
@@ -1006,16 +996,6 @@ issued_invoice_resource_config = ResourceConfig(
     primary_key_list=["id"],
     maybe_fetcher_type=None,
 )
-draft_invoice_resource_config = ResourceConfig(
-    api_path="invoices?status=draft",
-    maybe_state_time_attribute=None,
-    # Both draft invoices and issued invoices go into the same
-    # output
-    resultant_schema_key="invoice",
-    fetch_strategy="direct_fetch",
-    primary_key_list=["id"],
-    maybe_fetcher_type=None,
-)
 subscription_resource_config = ResourceConfig(
     api_path="subscriptions",
     maybe_state_time_attribute="created_at",
@@ -1048,7 +1028,6 @@ RESOURCE_TO_RESOURCE_CONFIG: Dict[str, BaseResourceConfig] = {
     "customer": customer_resource_config,
     "plan": plan_resource_config,
     "issued_invoice": issued_invoice_resource_config,
-    "draft_invoice": draft_invoice_resource_config,
     "subscription": subscription_resource_config,
     "subscription_version": subscription_version_resource_config,
     "credit_ledger_entry": credit_ledger_entry_resource_config,
@@ -1079,9 +1058,7 @@ def lambda_handler(req, context):
     ## 1. Fivetran is invoking this function on a schedule.
     ##    In this case, we expect all the resources to effectively run a full "conceptual sync"
     ##    from their stored state. In most cases, the stored state will include a time boundary
-    ##    so we'll be adding resources after that time boundary. There's some cases for which that's
-    ##    not true, like draft invoices -- there, we'll be syncing all draft invoices in every
-    ##    incremental sync.
+    ##    so we'll be adding resources after that time boundary.
     ## 2. Fivetran is invoking this function immediately after the last invocation, because
     ##    the last invocation didn't "finish". Here, we're conceptually still in the same sync
     ##    but some subset of streams might have more to output. We can know this is true if
