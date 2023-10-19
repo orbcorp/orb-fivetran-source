@@ -430,10 +430,7 @@ def fetcher_for_resource_config(resource_config) -> Type[AbstractResourceFetcher
 class FunctionState:
     customer_cursor: AbstractCursor
     plan_cursor: AbstractCursor
-    # This cursor only applies to issued invoices.
-    # We always sync all draft invoices available.
     invoice_cursor: AbstractCursor
-    draft_invoice_cursor: AbstractCursor
     subscription_cursor: AbstractCursor
     subscription_version_cursor: AbstractCursor
     subscription_costs_cursor: AbstractCursor
@@ -445,7 +442,6 @@ class FunctionState:
             "customer": self.customer_cursor.serialize(),
             "plan": self.plan_cursor.serialize(),
             "invoice": self.invoice_cursor.serialize(),
-            "draft_invoice": self.draft_invoice_cursor.serialize(),
             "subscription": self.subscription_cursor.serialize(),
             "subscription_version": self.subscription_version_cursor.serialize(),
             "credit_ledger_entry": self.credit_ledger_entry_cursor.serialize(),
@@ -460,7 +456,6 @@ class FunctionState:
                 customer_cursor=Cursor.min(),
                 plan_cursor=Cursor.min(),
                 invoice_cursor=Cursor.min(),
-                draft_invoice_cursor=Cursor.min(),
                 subscription_cursor=Cursor.min(),
                 subscription_version_cursor=Cursor.min(),
                 credit_ledger_entry_cursor=CursorWithSlices.min(),
@@ -485,7 +480,6 @@ class FunctionState:
                 plan_cursor=maybe_deserialize_resource_state(state, "plan"),
                 invoice_cursor=maybe_deserialize_resource_state(state, "invoice"),
                 subscription_cursor=maybe_deserialize_resource_state(state, "subscription"),
-                draft_invoice_cursor=maybe_deserialize_resource_state(state, "draft_invoice"),
                 subscription_version_cursor=maybe_deserialize_resource_state(state, "subscription_version"),
                 credit_ledger_entry_cursor=maybe_deserialize_nested_resource_state(state, "credit_ledger_entry"),
                 subscription_costs_cursor=SubscriptionCostsCursor.maybe_deserialize_state(state),
@@ -501,8 +495,6 @@ class FunctionState:
             return self.subscription_cursor
         elif resource == "issued_invoice":
             return self.invoice_cursor
-        elif resource == "draft_invoice":
-            return self.draft_invoice_cursor
         elif resource == "subscription_version":
             return self.subscription_version_cursor
         elif resource == "credit_ledger_entry":
@@ -522,8 +514,6 @@ class FunctionState:
             self.plan_cursor = cursor
         elif resource == "issued_invoice":
             self.invoice_cursor = cursor
-        elif resource == "draft_invoice":
-            self.draft_invoice_cursor = cursor
         elif resource == "subscription_version":
             self.subscription_version_cursor = cursor
         elif resource == "credit_ledger_entry":
@@ -645,6 +635,8 @@ class PeriodicSubscriptionCost:
     subtotal: Decimal
     total: Decimal
     price_id: str
+    price_name: str
+    billable_metric_id: Optional[str]
     grouped_costs_json: str
 
     def serialize(self):
@@ -655,6 +647,11 @@ class PeriodicSubscriptionCost:
             "subtotal": self.subtotal,
             "total": self.total,
             "price_id": self.price_id,
+            "price": {
+                "id": self.price_id,
+                "name": self.price_name,
+                "billable_metric_id": self.billable_metric_id,
+            },
             "grouped_costs_json": self.grouped_costs_json,
         }
 
@@ -920,21 +917,25 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
     The size of the timeframe is determined by the `COSTS_TIMEFRAME_WINDOW` constant.
     """
 
-    def fetch_subscription_ids(self, subscription_pagination_cursor: Optional[str]) -> Tuple[List[str], SimplePaginationCursor]:
+    def fetch_subscriptions(self, subscription_pagination_cursor: Optional[str]) -> Tuple[List[Any], SimplePaginationCursor]:
         parent_resources, all_slices_cursor = self.fetch_resources_from_path(
             "subscriptions", pagination_cursor=subscription_pagination_cursor
         )
-        return list(map(lambda resource: resource["id"], parent_resources)), all_slices_cursor
+        return parent_resources, all_slices_cursor
 
     def fetch_after_cursor(self, initial_cursor: SubscriptionCostsCursor) -> AbstractResourceFetchResponse[SubscriptionCostsCursor]:
         response = SubscriptionCostsFetchResponse.init_with_cursor(initial_cursor, resource_config=self.resource_config)
         timeframe_start = initial_cursor.current_timeframe_start
         timeframe_end = initial_cursor.current_timeframe_end
 
-        (subscription_ids, subscription_pagination_cursor) = self.fetch_subscription_ids(
+        (subscriptions, subscription_pagination_cursor) = self.fetch_subscriptions(
             initial_cursor.current_subscriptions_pagination_cursor
         )
-        for subscription_id in subscription_ids:
+        for subscription in subscriptions:
+            subscription_id = subscription['id']
+            if subscription["status"] == "upcoming":
+                logger.info("Skipping upcoming subscription: %s", subscription_id)
+                continue
             one_month_costs = req_session.get(
                 BASE_ORB_API_URL + f"subscriptions/{subscription_id}/costs",
                 headers=self.auth_header,
@@ -959,6 +960,8 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
                         subtotal=price_cost["subtotal"],
                         total=price_cost["total"],
                         price_id=price_cost["price"]["id"],
+                        price_name=price_cost["price"]["name"],
+                        billable_metric_id=price_cost["price"]["billable_metric"]["id"] if price_cost["price"]["billable_metric"] is not None else None,
                         grouped_costs_json=json.dumps(price_cost["price_groups"]),
                     )
                     response.add_resource(psc)
@@ -1002,16 +1005,6 @@ issued_invoice_resource_config = ResourceConfig(
     primary_key_list=["id"],
     maybe_fetcher_type=None,
 )
-draft_invoice_resource_config = ResourceConfig(
-    api_path="invoices?status=draft",
-    maybe_state_time_attribute=None,
-    # Both draft invoices and issued invoices go into the same
-    # output
-    resultant_schema_key="invoice",
-    fetch_strategy="direct_fetch",
-    primary_key_list=["id"],
-    maybe_fetcher_type=None,
-)
 subscription_resource_config = ResourceConfig(
     api_path="subscriptions",
     maybe_state_time_attribute="created_at",
@@ -1044,7 +1037,6 @@ RESOURCE_TO_RESOURCE_CONFIG: Dict[str, BaseResourceConfig] = {
     "customer": customer_resource_config,
     "plan": plan_resource_config,
     "issued_invoice": issued_invoice_resource_config,
-    "draft_invoice": draft_invoice_resource_config,
     "subscription": subscription_resource_config,
     "subscription_version": subscription_version_resource_config,
     "credit_ledger_entry": credit_ledger_entry_resource_config,
@@ -1068,6 +1060,16 @@ def lambda_handler(req, context):
 
     state = FunctionState.from_serialized_state(req.get("state"))
 
+    # A comma-delimited string of resource names to exclude from the sync.
+    excluded_resources_str = secrets.get("excluded_resources", None)
+    excluded_resources = []
+    if excluded_resources_str:
+        excluded_resources = [x.strip() for x in excluded_resources_str.split(',')]
+        logger.info(f"Excluding resources: {excluded_resources}")
+        for resource in excluded_resources:
+            if resource not in RESOURCE_TO_RESOURCE_CONFIG.keys():
+                raise Exception(f"Excluded resource {resource} is not a valid resource name.")
+
     has_more = False
     collected_resources: Dict = {}
 
@@ -1075,9 +1077,7 @@ def lambda_handler(req, context):
     ## 1. Fivetran is invoking this function on a schedule.
     ##    In this case, we expect all the resources to effectively run a full "conceptual sync"
     ##    from their stored state. In most cases, the stored state will include a time boundary
-    ##    so we'll be adding resources after that time boundary. There's some cases for which that's
-    ##    not true, like draft invoices -- there, we'll be syncing all draft invoices in every
-    ##    incremental sync.
+    ##    so we'll be adding resources after that time boundary.
     ## 2. Fivetran is invoking this function immediately after the last invocation, because
     ##    the last invocation didn't "finish". Here, we're conceptually still in the same sync
     ##    but some subset of streams might have more to output. We can know this is true if
@@ -1095,6 +1095,9 @@ def lambda_handler(req, context):
     for resource, resource_config in RESOURCE_TO_RESOURCE_CONFIG.items():
         if resource not in streams_to_invoke:
             logger.info(f"Skipping {resource} resource because this is a paginated invocation, and this resource is exhausted.")
+            continue
+        if resource in excluded_resources:
+            logger.info(f"Skipping {resource} resource because it is specified to be excluded.")
             continue
         fetcher_type = fetcher_for_resource_config(resource_config)
         fetcher: AbstractResourceFetcher = fetcher_type(authorization_header=authorization_header, resource_config=resource_config)
