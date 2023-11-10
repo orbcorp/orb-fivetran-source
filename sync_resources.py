@@ -35,6 +35,9 @@ MIN_COSTS_START_TIME = pendulum.datetime(2023, 1, 1, 0, 0, 0, tz="UTC")
 COSTS_TIMEFRAME_WINDOW = 10
 GRACE_PERIOD_BUFFER_DAYS = 2
 
+## Subscription Costs
+SUBSCRIPTION_COSTS_PAGE_SIZE = DEFAULT_PAGE_SIZE
+
 ## Ledger Entries
 LEDGER_ENTRIES_PAGE_SIZE = 300
 
@@ -441,6 +444,7 @@ class BaseResourceConfig:
     primary_key_list: List[str]
     resultant_schema_key: str
     maybe_fetcher_type: Optional[Type[AbstractResourceFetcher]]
+    page_size: int = field(default=DEFAULT_PAGE_SIZE, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -450,7 +454,7 @@ class ResourceConfig(BaseResourceConfig):
     # to store state in between syncs.
     maybe_state_time_attribute: Optional[str]
     fetch_strategy: Literal["direct_fetch", "resource_events"]
-    page_size: int = DEFAULT_PAGE_SIZE
+    page_size: int = field(default=DEFAULT_PAGE_SIZE, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -465,7 +469,7 @@ class NestedResourceConfig(BaseResourceConfig):
     # The path to a single slice
     single_slice_api_path: Callable[[str], str]
     maybe_state_time_attribute: Optional[str]
-    page_size: int = DEFAULT_PAGE_SIZE
+    page_size: int = field(default=DEFAULT_PAGE_SIZE, kw_only=True)
 
     def slice_resource_config(self, slice_id: str) -> ResourceConfig:
         """
@@ -1240,6 +1244,18 @@ credit_ledger_entry_resource_config = NestedResourceConfig(
     page_size=LEDGER_ENTRIES_PAGE_SIZE,
 )
 
+subscription_costs_resource_config = BaseResourceConfig(
+    primary_key_list=[
+        "subscription_id",
+        "timeframe_start",
+        "timeframe_end",
+        "price_id",
+    ],
+    resultant_schema_key="subscription_costs",
+    maybe_fetcher_type=SubscriptionCostsFetcher,
+    page_size=SUBSCRIPTION_COSTS_PAGE_SIZE,
+)
+
 RESOURCE_TO_RESOURCE_CONFIG: Dict[str, BaseResourceConfig] = {
     "customer": customer_resource_config,
     "plan": plan_resource_config,
@@ -1247,16 +1263,7 @@ RESOURCE_TO_RESOURCE_CONFIG: Dict[str, BaseResourceConfig] = {
     "subscription": subscription_resource_config,
     "subscription_version": subscription_version_resource_config,
     "credit_ledger_entry": credit_ledger_entry_resource_config,
-    "subscription_costs": BaseResourceConfig(
-        primary_key_list=[
-            "subscription_id",
-            "timeframe_start",
-            "timeframe_end",
-            "price_id",
-        ],
-        resultant_schema_key="subscription_costs",
-        maybe_fetcher_type=SubscriptionCostsFetcher,
-    ),
+    "subscription_costs": subscription_costs_resource_config,
 }
 
 
