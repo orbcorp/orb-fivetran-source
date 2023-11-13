@@ -3,7 +3,19 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
-from typing import Any, Callable, Dict, Generic, List, Literal, Optional, Tuple, Type, TypeVar, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    cast,
+)
 
 import boto3
 import pendulum
@@ -15,13 +27,16 @@ logger.setLevel(logging.INFO)
 s3_client = boto3.client("s3")
 
 BASE_ORB_API_URL = "https://api.withorb.com/v1/"
-PAGE_SIZE = 20
+DEFAULT_PAGE_SIZE = 20
 MAX_PAGES_PER_SYNC = 10
 
 ## Only applies to costs
 MIN_COSTS_START_TIME = pendulum.datetime(2023, 1, 1, 0, 0, 0, tz="UTC")
 COSTS_TIMEFRAME_WINDOW = 10
 GRACE_PERIOD_BUFFER_DAYS = 2
+
+## Subscription Costs
+SUBSCRIPTION_COSTS_PAGE_SIZE = DEFAULT_PAGE_SIZE
 
 ## Ledger Entries
 LEDGER_ENTRIES_PAGE_SIZE = 300
@@ -73,7 +88,9 @@ class SimplePaginationCursor(AbstractCursor):
 
     @staticmethod
     def deserialize(d: Dict[str, Any]) -> "SimplePaginationCursor":
-        return SimplePaginationCursor(has_more=d["has_more"], current_cursor=d["current_cursor"])
+        return SimplePaginationCursor(
+            has_more=d["has_more"], current_cursor=d["current_cursor"]
+        )
 
     @staticmethod
     def min() -> "SimplePaginationCursor":
@@ -104,16 +121,23 @@ class Cursor(AbstractCursor):
     min_time_after_pagination_exhausted: Optional[pendulum.DateTime] = None
 
     def pagination_exhausted(self) -> bool:
-        return self.maybe_pagination_cursor is None and self.min_time_after_pagination_exhausted is None
+        return (
+            self.maybe_pagination_cursor is None
+            and self.min_time_after_pagination_exhausted is None
+        )
 
     @staticmethod
     def min() -> "Cursor":
         return Cursor(
-            min_time_cursor=pendulum.from_timestamp(0), maybe_pagination_cursor=None, min_time_after_pagination_exhausted=None
+            min_time_cursor=pendulum.from_timestamp(0),
+            maybe_pagination_cursor=None,
+            min_time_after_pagination_exhausted=None,
         )
 
     def with_updated_pagination_result(
-        self, pagination_cursor: Optional[str], max_time_in_page: Optional[pendulum.DateTime]
+        self,
+        pagination_cursor: Optional[str],
+        max_time_in_page: Optional[pendulum.DateTime],
     ) -> "Cursor":
         # No more pages left, and pagination is exhausted
         if pagination_cursor is None:
@@ -121,7 +145,9 @@ class Cursor(AbstractCursor):
                 # We will set to `max_time_in_page` in the case that `min_time_after_pagination_exhausted` is None,
                 # which means that we only had a single page of results. If max_time_in_page is None, that means
                 # that there were no results so we want to maintain the `min_time_cursor`
-                min_time_cursor=self.min_time_after_pagination_exhausted or max_time_in_page or self.min_time_cursor,
+                min_time_cursor=self.min_time_after_pagination_exhausted
+                or max_time_in_page
+                or self.min_time_cursor,
                 maybe_pagination_cursor=None,
                 min_time_after_pagination_exhausted=None,
             )
@@ -136,7 +162,8 @@ class Cursor(AbstractCursor):
                 # If we don't already have a `min_time_after_pagination_exhausted`, then set this
                 # to the max time in this page, because that means this is the first page result
                 # Note that this assumes we're paginating *newest* to *oldest*
-                min_time_after_pagination_exhausted=self.min_time_after_pagination_exhausted or max_time_in_page,
+                min_time_after_pagination_exhausted=self.min_time_after_pagination_exhausted
+                or max_time_in_page,
             )
 
     def serialize(self):
@@ -151,12 +178,18 @@ class Cursor(AbstractCursor):
     @staticmethod
     def deserialize(serialized_state) -> "Cursor":
         def maybe_parse_as_datetime(datetime_field) -> Optional[pendulum.DateTime]:
-            return cast(pendulum.DateTime, pendulum.parse(datetime_field)) if datetime_field is not None else None
+            return (
+                cast(pendulum.DateTime, pendulum.parse(datetime_field))
+                if datetime_field is not None
+                else None
+            )
 
         return Cursor(
             min_time_cursor=pendulum.parse(serialized_state["min_time_cursor"]),  # type: ignore
             maybe_pagination_cursor=serialized_state["maybe_pagination_cursor"],
-            min_time_after_pagination_exhausted=maybe_parse_as_datetime(serialized_state["min_time_after_pagination_exhausted"]),
+            min_time_after_pagination_exhausted=maybe_parse_as_datetime(
+                serialized_state["min_time_after_pagination_exhausted"]
+            ),
         )
 
 
@@ -185,30 +218,41 @@ class CursorWithSlices(AbstractCursor):
         self.slices_pagination_cursor = cursor
 
     def all_current_slices_exhausted(self):
-        return all(cursor.pagination_exhausted() for cursor in self.per_slice_cursor.values())
+        return all(
+            cursor.pagination_exhausted() for cursor in self.per_slice_cursor.values()
+        )
 
     def pagination_exhausted(self) -> bool:
         return self.slices_pagination_cursor.pagination_exhausted() and all(
-            self.cursor_for_slice(slice_id).pagination_exhausted() for slice_id in self.per_slice_cursor.keys()
+            self.cursor_for_slice(slice_id).pagination_exhausted()
+            for slice_id in self.per_slice_cursor.keys()
         )
 
     def serialize(self):
         return {
-            "per_slice_cursor": {slice_id: cursor.serialize() for slice_id, cursor in self.per_slice_cursor.items()},
+            "per_slice_cursor": {
+                slice_id: cursor.serialize()
+                for slice_id, cursor in self.per_slice_cursor.items()
+            },
             "slices_pagination_cursor": self.slices_pagination_cursor.serialize(),
         }
 
     @staticmethod
     def min() -> "CursorWithSlices":
-        return CursorWithSlices(per_slice_cursor={}, slices_pagination_cursor=SimplePaginationCursor.min())
+        return CursorWithSlices(
+            per_slice_cursor={}, slices_pagination_cursor=SimplePaginationCursor.min()
+        )
 
     @staticmethod
     def deserialize(serialized_state) -> "CursorWithSlices":
         return CursorWithSlices(
             per_slice_cursor={
-                slice_id: Cursor.deserialize(cursor) for slice_id, cursor in serialized_state["per_slice_cursor"].items()
+                slice_id: Cursor.deserialize(cursor)
+                for slice_id, cursor in serialized_state["per_slice_cursor"].items()
             },
-            slices_pagination_cursor=SimplePaginationCursor.deserialize(serialized_state["slices_pagination_cursor"]),
+            slices_pagination_cursor=SimplePaginationCursor.deserialize(
+                serialized_state["slices_pagination_cursor"]
+            ),
         )
 
 
@@ -245,13 +289,19 @@ class SubscriptionCostsCursor(AbstractCursor):
         current_timeframe_start_str = serialized_state["current_timeframe_start"]
         current_timeframe_end_str = serialized_state["current_timeframe_end"]
         return SubscriptionCostsCursor(
-            current_timeframe_start=pendulum.parse(current_timeframe_start_str, tz="UTC"),
+            current_timeframe_start=pendulum.parse(
+                current_timeframe_start_str, tz="UTC"
+            ),
             current_timeframe_end=pendulum.parse(current_timeframe_end_str, tz="UTC"),
-            current_subscriptions_pagination_cursor=serialized_state["current_subscriptions_pagination_cursor"],
+            current_subscriptions_pagination_cursor=serialized_state[
+                "current_subscriptions_pagination_cursor"
+            ],
         )
 
     @staticmethod
-    def calculate_end_time_from_start_time(start_time: pendulum.DateTime) -> pendulum.DateTime:
+    def calculate_end_time_from_start_time(
+        start_time: pendulum.DateTime,
+    ) -> pendulum.DateTime:
         return min(
             start_time.add(days=COSTS_TIMEFRAME_WINDOW),
             pendulum.now("UTC").subtract(days=GRACE_PERIOD_BUFFER_DAYS),
@@ -261,7 +311,9 @@ class SubscriptionCostsCursor(AbstractCursor):
     def min() -> "SubscriptionCostsCursor":
         return SubscriptionCostsCursor(
             current_timeframe_start=MIN_COSTS_START_TIME,
-            current_timeframe_end=SubscriptionCostsCursor.calculate_end_time_from_start_time(MIN_COSTS_START_TIME),
+            current_timeframe_end=SubscriptionCostsCursor.calculate_end_time_from_start_time(
+                MIN_COSTS_START_TIME
+            ),
             current_subscriptions_pagination_cursor=None,
         )
 
@@ -275,9 +327,15 @@ class SubscriptionCostsCursor(AbstractCursor):
     def advance_timeframe_bounds(self, timeframe_end):
         assert self.current_subscriptions_pagination_cursor is None
         self.current_timeframe_start = timeframe_end
-        self.current_timeframe_end = SubscriptionCostsCursor.calculate_end_time_from_start_time(self.current_timeframe_start)
+        self.current_timeframe_end = (
+            SubscriptionCostsCursor.calculate_end_time_from_start_time(
+                self.current_timeframe_start
+            )
+        )
 
-    def update_subscription_pagination_for_current_timeframe(self, pagination_cursor: Optional[str]):
+    def update_subscription_pagination_for_current_timeframe(
+        self, pagination_cursor: Optional[str]
+    ):
         """
         This advances which subscription we're on, while staying on the same timeframe.
         """
@@ -311,7 +369,9 @@ class AbstractResourceFetchResponse(ABC, Generic[T]):
 
     @staticmethod
     @abstractmethod
-    def init_with_cursor(cursor: T, resource_config) -> "AbstractResourceFetchResponse[T]":
+    def init_with_cursor(
+        cursor: T, resource_config
+    ) -> "AbstractResourceFetchResponse[T]":
         pass
 
 
@@ -324,21 +384,30 @@ class AbstractResourceFetcher(ABC, Generic[T]):
     def fetch_after_cursor(self, initial_cursor: T) -> AbstractResourceFetchResponse[T]:
         pass
 
-    def fetch_all(self, maybe_existing_state_cursor: T) -> AbstractResourceFetchResponse[T]:
+    def fetch_all(
+        self, maybe_existing_state_cursor: T
+    ) -> AbstractResourceFetchResponse[T]:
         initial_cursor = (
-            maybe_existing_state_cursor if maybe_existing_state_cursor is not None else type(maybe_existing_state_cursor).min()
+            maybe_existing_state_cursor
+            if maybe_existing_state_cursor is not None
+            else type(maybe_existing_state_cursor).min()
         )
         return self.fetch_after_cursor(initial_cursor)
 
     def fetch_resources_from_path(
-        self, path, pagination_cursor: Optional[str] = None, max_pages=MAX_PAGES_PER_SYNC
+        self,
+        path,
+        pagination_cursor: Optional[str] = None,
+        max_pages=MAX_PAGES_PER_SYNC,
     ) -> Tuple[List[Any], SimplePaginationCursor]:
         """
         Exhaustively fetches resources from the passed in path. Note that
         this needs to be called on every invocation of this sync, so
         a very expensive parent resource will cause issues
         """
-        params = {"limit": getattr(self.resource_config, "page_size", PAGE_SIZE)}
+        params = {
+            "limit": getattr(self.resource_config, "page_size", DEFAULT_PAGE_SIZE)
+        }
         if pagination_cursor:
             params["cursor"] = pagination_cursor
 
@@ -363,7 +432,10 @@ class AbstractResourceFetcher(ABC, Generic[T]):
 
         return (
             resources,
-            SimplePaginationCursor(has_more=has_more, current_cursor=response_json["pagination_metadata"]["next_cursor"]),
+            SimplePaginationCursor(
+                has_more=has_more,
+                current_cursor=response_json["pagination_metadata"]["next_cursor"],
+            ),
         )
 
 
@@ -372,6 +444,7 @@ class BaseResourceConfig:
     primary_key_list: List[str]
     resultant_schema_key: str
     maybe_fetcher_type: Optional[Type[AbstractResourceFetcher]]
+    page_size: int = field(default=DEFAULT_PAGE_SIZE, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -381,7 +454,7 @@ class ResourceConfig(BaseResourceConfig):
     # to store state in between syncs.
     maybe_state_time_attribute: Optional[str]
     fetch_strategy: Literal["direct_fetch", "resource_events"]
-    page_size: int = PAGE_SIZE
+    page_size: int = field(default=DEFAULT_PAGE_SIZE, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -396,7 +469,7 @@ class NestedResourceConfig(BaseResourceConfig):
     # The path to a single slice
     single_slice_api_path: Callable[[str], str]
     maybe_state_time_attribute: Optional[str]
-    page_size: int = PAGE_SIZE
+    page_size: int = field(default=DEFAULT_PAGE_SIZE, kw_only=True)
 
     def slice_resource_config(self, slice_id: str) -> ResourceConfig:
         """
@@ -471,7 +544,9 @@ class FunctionState:
 
             def maybe_deserialize_nested_resource_state(state: Dict, resource_name):
                 if state.get(resource_name) is not None:
-                    return CursorWithSlices.deserialize(serialized_state=state[resource_name])
+                    return CursorWithSlices.deserialize(
+                        serialized_state=state[resource_name]
+                    )
                 else:
                     return CursorWithSlices.min()
 
@@ -479,10 +554,18 @@ class FunctionState:
                 customer_cursor=maybe_deserialize_resource_state(state, "customer"),
                 plan_cursor=maybe_deserialize_resource_state(state, "plan"),
                 invoice_cursor=maybe_deserialize_resource_state(state, "invoice"),
-                subscription_cursor=maybe_deserialize_resource_state(state, "subscription"),
-                subscription_version_cursor=maybe_deserialize_resource_state(state, "subscription_version"),
-                credit_ledger_entry_cursor=maybe_deserialize_nested_resource_state(state, "credit_ledger_entry"),
-                subscription_costs_cursor=SubscriptionCostsCursor.maybe_deserialize_state(state),
+                subscription_cursor=maybe_deserialize_resource_state(
+                    state, "subscription"
+                ),
+                subscription_version_cursor=maybe_deserialize_resource_state(
+                    state, "subscription_version"
+                ),
+                credit_ledger_entry_cursor=maybe_deserialize_nested_resource_state(
+                    state, "credit_ledger_entry"
+                ),
+                subscription_costs_cursor=SubscriptionCostsCursor.maybe_deserialize_state(
+                    state
+                ),
             )
 
     def state_cursor_for_resource(self, resource) -> AbstractCursor:
@@ -530,16 +613,40 @@ class FivetranFunctionResponse:
     insert: Dict = field(default_factory=dict)
     schema: Dict = field(
         default_factory=lambda: {
-            "customer": {"primary_key": RESOURCE_TO_RESOURCE_CONFIG["customer"].primary_key_list},
-            "plan": {"primary_key": RESOURCE_TO_RESOURCE_CONFIG["plan"].primary_key_list},
-            "invoice": {"primary_key": RESOURCE_TO_RESOURCE_CONFIG["issued_invoice"].primary_key_list},
-            "subscription": {"primary_key": RESOURCE_TO_RESOURCE_CONFIG["subscription"].primary_key_list},
-            "credit_ledger_entry": {"primary_key": RESOURCE_TO_RESOURCE_CONFIG["credit_ledger_entry"].primary_key_list},
-            "subscription_costs": {"primary_key": RESOURCE_TO_RESOURCE_CONFIG["subscription_costs"].primary_key_list},
+            "customer": {
+                "primary_key": RESOURCE_TO_RESOURCE_CONFIG["customer"].primary_key_list
+            },
+            "plan": {
+                "primary_key": RESOURCE_TO_RESOURCE_CONFIG["plan"].primary_key_list
+            },
+            "invoice": {
+                "primary_key": RESOURCE_TO_RESOURCE_CONFIG[
+                    "issued_invoice"
+                ].primary_key_list
+            },
+            "subscription": {
+                "primary_key": RESOURCE_TO_RESOURCE_CONFIG[
+                    "subscription"
+                ].primary_key_list
+            },
+            "credit_ledger_entry": {
+                "primary_key": RESOURCE_TO_RESOURCE_CONFIG[
+                    "credit_ledger_entry"
+                ].primary_key_list
+            },
+            "subscription_costs": {
+                "primary_key": RESOURCE_TO_RESOURCE_CONFIG[
+                    "subscription_costs"
+                ].primary_key_list
+            },
             # A subscription version is uniquely identified by a subscription ID and a
             # start date given that the start date is in the past (which is the only resources
             # we'll sync here.)
-            "subscription_version": {"primary_key": RESOURCE_TO_RESOURCE_CONFIG["subscription_version"].primary_key_list},
+            "subscription_version": {
+                "primary_key": RESOURCE_TO_RESOURCE_CONFIG[
+                    "subscription_version"
+                ].primary_key_list
+            },
         }
     )
     has_more: bool = False
@@ -566,7 +673,10 @@ class FivetranFunctionResponse:
     @staticmethod
     def test_response():
         return FivetranFunctionResponse(
-            state=FunctionState.from_serialized_state(None), insert={}, schema={}, has_more=False
+            state=FunctionState.from_serialized_state(None),
+            insert={},
+            schema={},
+            has_more=False,
         ).as_dict()
 
 
@@ -590,8 +700,14 @@ class ResourceFetchResponse(AbstractResourceFetchResponse[Cursor]):
             self.resource_id_to_resource[primary_key] = resource
 
     @staticmethod
-    def init_with_cursor(cursor: Cursor, resource_config: ResourceConfig) -> "ResourceFetchResponse":
-        return ResourceFetchResponse(resource_id_to_resource={}, updated_state=cursor, resource_config=resource_config)
+    def init_with_cursor(
+        cursor: Cursor, resource_config: ResourceConfig
+    ) -> "ResourceFetchResponse":
+        return ResourceFetchResponse(
+            resource_id_to_resource={},
+            updated_state=cursor,
+            resource_config=resource_config,
+        )
 
     def get_updated_state(self) -> Cursor:
         return self.updated_state
@@ -604,9 +720,13 @@ class NestedResourceFetchResponse(AbstractResourceFetchResponse[CursorWithSlices
     nested_resource_config: NestedResourceConfig
 
     @staticmethod
-    def init_with_cursor(cursor: CursorWithSlices, resource_config: NestedResourceConfig) -> "NestedResourceFetchResponse":
+    def init_with_cursor(
+        cursor: CursorWithSlices, resource_config: NestedResourceConfig
+    ) -> "NestedResourceFetchResponse":
         return NestedResourceFetchResponse(
-            slice_id_to_resource_fetch_response={}, updated_state=cursor, nested_resource_config=resource_config
+            slice_id_to_resource_fetch_response={},
+            updated_state=cursor,
+            nested_resource_config=resource_config,
         )
 
     def update_all_slices_cursor(self, cursor: SimplePaginationCursor):
@@ -657,7 +777,9 @@ class PeriodicSubscriptionCost:
 
 
 @dataclass
-class SubscriptionCostsFetchResponse(AbstractResourceFetchResponse[SubscriptionCostsCursor]):
+class SubscriptionCostsFetchResponse(
+    AbstractResourceFetchResponse[SubscriptionCostsCursor]
+):
     subscription_costs: List[PeriodicSubscriptionCost]
     updated_state: SubscriptionCostsCursor
     resource_config: ResourceConfig
@@ -668,16 +790,26 @@ class SubscriptionCostsFetchResponse(AbstractResourceFetchResponse[SubscriptionC
     def add_resource(self, resource):
         self.subscription_costs.append(resource)
 
-    def update_cursor_state(self, subscriptions_cursor: SimplePaginationCursor, timeframe_end: pendulum.DateTime):
+    def update_cursor_state(
+        self,
+        subscriptions_cursor: SimplePaginationCursor,
+        timeframe_end: pendulum.DateTime,
+    ):
         if subscriptions_cursor.current_cursor is None:
             self.updated_state.mark_current_timeframe_exhausted()
             self.updated_state.advance_timeframe_bounds(timeframe_end=timeframe_end)
         else:
-            self.updated_state.update_subscription_pagination_for_current_timeframe(subscriptions_cursor.current_cursor)
+            self.updated_state.update_subscription_pagination_for_current_timeframe(
+                subscriptions_cursor.current_cursor
+            )
 
     @staticmethod
-    def init_with_cursor(cursor: SubscriptionCostsCursor, resource_config: ResourceConfig) -> "SubscriptionCostsFetchResponse":
-        return SubscriptionCostsFetchResponse(subscription_costs=[], updated_state=cursor, resource_config=resource_config)
+    def init_with_cursor(
+        cursor: SubscriptionCostsCursor, resource_config: ResourceConfig
+    ) -> "SubscriptionCostsFetchResponse":
+        return SubscriptionCostsFetchResponse(
+            subscription_costs=[], updated_state=cursor, resource_config=resource_config
+        )
 
     def get_updated_state(self) -> SubscriptionCostsCursor:
         return self.updated_state
@@ -690,7 +822,9 @@ class DirectResourceFetcher(AbstractResourceFetcher[Cursor]):
     """
 
     def fetch_after_cursor(self, initial_cursor: Cursor) -> ResourceFetchResponse:
-        supports_incremental_syncs = self.resource_config.maybe_state_time_attribute is not None
+        supports_incremental_syncs = (
+            self.resource_config.maybe_state_time_attribute is not None
+        )
         """
         Fetches resources after the passed in cursor. Note that this will also attempt to paginate
         up to MAX_PAGES_PER_SYNC times.
@@ -700,10 +834,14 @@ class DirectResourceFetcher(AbstractResourceFetcher[Cursor]):
         """
         params: Dict[str, Any] = {"limit": self.resource_config.page_size}
 
-        def update_with_new_result_page(response: ResourceFetchResponse) -> ResourceFetchResponse:
+        def update_with_new_result_page(
+            response: ResourceFetchResponse,
+        ) -> ResourceFetchResponse:
             existing_cursor = response.updated_state
             if self.resource_config.maybe_state_time_attribute is not None:
-                params[f"{self.resource_config.maybe_state_time_attribute}[gte]"] = existing_cursor.min_time_cursor.isoformat()
+                params[
+                    f"{self.resource_config.maybe_state_time_attribute}[gte]"
+                ] = existing_cursor.min_time_cursor.isoformat()
 
             if existing_cursor.maybe_pagination_cursor is not None:
                 params["cursor"] = existing_cursor.maybe_pagination_cursor
@@ -716,7 +854,9 @@ class DirectResourceFetcher(AbstractResourceFetcher[Cursor]):
 
             resources = response_json["data"]
             updated_pagination_cursor = (
-                response_json["pagination_metadata"]["next_cursor"] if response_json["pagination_metadata"]["has_more"] else None
+                response_json["pagination_metadata"]["next_cursor"]
+                if response_json["pagination_metadata"]["has_more"]
+                else None
             )
             if supports_incremental_syncs:
                 updated_response_cursor = existing_cursor.with_updated_pagination_result(
@@ -724,7 +864,12 @@ class DirectResourceFetcher(AbstractResourceFetcher[Cursor]):
                     max_time_in_page=max(
                         map(
                             lambda resource: cast(
-                                pendulum.DateTime, pendulum.parse(resource[self.resource_config.maybe_state_time_attribute])
+                                pendulum.DateTime,
+                                pendulum.parse(
+                                    resource[
+                                        self.resource_config.maybe_state_time_attribute
+                                    ]
+                                ),
                             ),
                             resources,
                         ),
@@ -734,7 +879,9 @@ class DirectResourceFetcher(AbstractResourceFetcher[Cursor]):
             else:
                 assert existing_cursor.min_time_cursor == pendulum.from_timestamp(0)
                 assert existing_cursor.min_time_after_pagination_exhausted is None
-                updated_response_cursor = replace(existing_cursor, maybe_pagination_cursor=updated_pagination_cursor)
+                updated_response_cursor = replace(
+                    existing_cursor, maybe_pagination_cursor=updated_pagination_cursor
+                )
 
             # Update passed in response with new resources
             for resource in resources:
@@ -743,7 +890,9 @@ class DirectResourceFetcher(AbstractResourceFetcher[Cursor]):
             response.updated_state = updated_response_cursor
             return response
 
-        response = ResourceFetchResponse.init_with_cursor(initial_cursor, resource_config=self.resource_config)
+        response = ResourceFetchResponse.init_with_cursor(
+            initial_cursor, resource_config=self.resource_config
+        )
         updated_response = update_with_new_result_page(response)
         num_pages_fetched = 1
 
@@ -764,24 +913,37 @@ class NestedResourceFetcher(AbstractResourceFetcher[CursorWithSlices]):
     Credit Ledger Entries, we need to first fetch all customers
     """
 
-    def fetch_slices(self, pagination_cursor: Optional[str]) -> Tuple[List[str], SimplePaginationCursor]:
+    def fetch_slices(
+        self, pagination_cursor: Optional[str]
+    ) -> Tuple[List[str], SimplePaginationCursor]:
         all_slices_api_path = self.resource_config.all_slices_api_path
         parent_resources, all_slices_cursor = self.fetch_resources_from_path(
             all_slices_api_path, pagination_cursor=pagination_cursor
         )
-        return list(map(lambda resource: resource["id"], parent_resources)), all_slices_cursor
+        return (
+            list(map(lambda resource: resource["id"], parent_resources)),
+            all_slices_cursor,
+        )
 
-    def fetch_after_cursor(self, initial_cursor: CursorWithSlices) -> NestedResourceFetchResponse:
+    def fetch_after_cursor(
+        self, initial_cursor: CursorWithSlices
+    ) -> NestedResourceFetchResponse:
         """
         Fetches all parent slices, and then for each of those slices, advances pagination
         """
-        logger.info(f"Current number of slices: {len(initial_cursor.per_slice_cursor.keys())}")
-        response = NestedResourceFetchResponse.init_with_cursor(initial_cursor, resource_config=self.resource_config)
+        logger.info(
+            f"Current number of slices: {len(initial_cursor.per_slice_cursor.keys())}"
+        )
+        response = NestedResourceFetchResponse.init_with_cursor(
+            initial_cursor, resource_config=self.resource_config
+        )
 
         # If we haven't finished exhausting all slices, then don't try to fetch more slices.
         paginating_existing_slices = False
         if not response.get_updated_state().all_current_slices_exhausted():
-            logger.info("Continuing to fetch nested resources for the current set of slices...")
+            logger.info(
+                "Continuing to fetch nested resources for the current set of slices..."
+            )
             paginating_existing_slices = True
             slice_ids = list(response.get_updated_state().per_slice_cursor.keys())
         else:
@@ -794,20 +956,32 @@ class NestedResourceFetcher(AbstractResourceFetcher[CursorWithSlices]):
             slice_ids, all_slices_cursor = self.fetch_slices(
                 pagination_cursor=response.top_level_slices_pagination_cursor().current_cursor
             )
-            if all_slices_cursor.current_cursor is None and all_slices_cursor.has_more is False:
-                logger.info("No more slices to fetch, so once this set of slices has been exhausted we'll start over...")
+            if (
+                all_slices_cursor.current_cursor is None
+                and all_slices_cursor.has_more is False
+            ):
+                logger.info(
+                    "No more slices to fetch, so once this set of slices has been exhausted we'll start over..."
+                )
             response.update_all_slices_cursor(all_slices_cursor)
 
-        slice_id_cursors = [(slice_id, initial_cursor.cursor_for_slice(slice_id)) for slice_id in slice_ids]
+        slice_id_cursors = [
+            (slice_id, initial_cursor.cursor_for_slice(slice_id))
+            for slice_id in slice_ids
+        ]
         num_slices_fetched = 0
-        for (slice_id, slice_cursor) in slice_id_cursors:
+        for slice_id, slice_cursor in slice_id_cursors:
             if paginating_existing_slices and slice_cursor.pagination_exhausted():
                 # We can only skip exhausted slices when paginating_existing_slices, because we need to
                 # go past the min/existing cursor at least once to know whether pagination is exhausted
                 continue
             # Only support direct fetchers for now
-            slice_resource_fetcher = DirectResourceFetcher(self.auth_header, self.resource_config.slice_resource_config(slice_id))
-            fetch_response: ResourceFetchResponse = slice_resource_fetcher.fetch_after_cursor(slice_cursor)
+            slice_resource_fetcher = DirectResourceFetcher(
+                self.auth_header, self.resource_config.slice_resource_config(slice_id)
+            )
+            fetch_response: ResourceFetchResponse = (
+                slice_resource_fetcher.fetch_after_cursor(slice_cursor)
+            )
             response.add_response_for_slice(slice_id, fetch_response)
             num_slices_fetched += 1
 
@@ -835,11 +1009,18 @@ class ResourceEventBasedResourceFetcher(AbstractResourceFetcher[Cursor]):
         # any time-based boundary -- just pagination state. By consequence, an invocation of the lambda
         # might be doing an incremental *pagination* but we'll loop through the whole pagination in every
         # conceptual sync.
-        supports_incremental_syncs = self.resource_config.maybe_state_time_attribute is not None
+        supports_incremental_syncs = (
+            self.resource_config.maybe_state_time_attribute is not None
+        )
 
-        params: Dict[str, Any] = {"limit": PAGE_SIZE, "resource_type": self.resource_event_resource_type_name()}
+        params: Dict[str, Any] = {
+            "limit": DEFAULT_PAGE_SIZE,
+            "resource_type": self.resource_event_resource_type_name(),
+        }
 
-        def update_with_new_result_page(response: ResourceFetchResponse) -> ResourceFetchResponse:
+        def update_with_new_result_page(
+            response: ResourceFetchResponse,
+        ) -> ResourceFetchResponse:
             existing_cursor = response.updated_state
 
             # This is always `created_at` because we're querying over the resource events, not the resource itself
@@ -856,22 +1037,34 @@ class ResourceEventBasedResourceFetcher(AbstractResourceFetcher[Cursor]):
 
             resource_events = response_json["data"]
             updated_pagination_cursor = (
-                response_json["pagination_metadata"]["next_cursor"] if response_json["pagination_metadata"]["has_more"] else None
+                response_json["pagination_metadata"]["next_cursor"]
+                if response_json["pagination_metadata"]["has_more"]
+                else None
             )
             if supports_incremental_syncs:
-                updated_response_cursor = existing_cursor.with_updated_pagination_result(
-                    pagination_cursor=updated_pagination_cursor,
-                    max_time_in_page=max(
-                        map(lambda event: cast(pendulum.DateTime, pendulum.parse(event["created_at"])), resource_events),
-                        default=None,
-                    ),
+                updated_response_cursor = (
+                    existing_cursor.with_updated_pagination_result(
+                        pagination_cursor=updated_pagination_cursor,
+                        max_time_in_page=max(
+                            map(
+                                lambda event: cast(
+                                    pendulum.DateTime,
+                                    pendulum.parse(event["created_at"]),
+                                ),
+                                resource_events,
+                            ),
+                            default=None,
+                        ),
+                    )
                 )
             else:
                 # If we aren't doing incremental syncs, we should *only* have pagination state and no
                 # time-based state.
                 assert existing_cursor.min_time_cursor == pendulum.from_timestamp(0)
                 assert existing_cursor.min_time_after_pagination_exhausted is None
-                updated_response_cursor = replace(existing_cursor, maybe_pagination_cursor=updated_pagination_cursor)
+                updated_response_cursor = replace(
+                    existing_cursor, maybe_pagination_cursor=updated_pagination_cursor
+                )
 
             # Update passed in response with new resources
             for event in resource_events:
@@ -883,12 +1076,17 @@ class ResourceEventBasedResourceFetcher(AbstractResourceFetcher[Cursor]):
             response.updated_state = updated_response_cursor
             return response
 
-        response = ResourceFetchResponse.init_with_cursor(initial_cursor, resource_config=self.resource_config)
+        response = ResourceFetchResponse.init_with_cursor(
+            initial_cursor, resource_config=self.resource_config
+        )
         updated_response = update_with_new_result_page(response)
         num_pages_fetched = 1
 
         # Fetch until there's nothing to paginate, or we've reached the max pages per sync
-        while not updated_response.get_updated_state().pagination_exhausted() and num_pages_fetched < MAX_PAGES_PER_SYNC:
+        while (
+            not updated_response.get_updated_state().pagination_exhausted()
+            and num_pages_fetched < MAX_PAGES_PER_SYNC
+        ):
             updated_response = update_with_new_result_page(response)
             num_pages_fetched += 1
 
@@ -902,7 +1100,9 @@ class SubscriptionVersionFetcher(ResourceEventBasedResourceFetcher):
     def resources_from_resource_event(self, event: Dict) -> List[Any]:
         assert "subscription" in event
         subscription_id = event["subscription"]["id"]
-        (subscription_versions, cursor) = self.fetch_resources_from_path(f"subscription_versions?subscription_id={subscription_id}")
+        (subscription_versions, cursor) = self.fetch_resources_from_path(
+            f"subscription_versions?subscription_id={subscription_id}"
+        )
         assert cursor.has_more is False
         return subscription_versions
 
@@ -917,14 +1117,20 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
     The size of the timeframe is determined by the `COSTS_TIMEFRAME_WINDOW` constant.
     """
 
-    def fetch_subscriptions(self, subscription_pagination_cursor: Optional[str]) -> Tuple[List[Any], SimplePaginationCursor]:
+    def fetch_subscriptions(
+        self, subscription_pagination_cursor: Optional[str]
+    ) -> Tuple[List[Any], SimplePaginationCursor]:
         parent_resources, all_slices_cursor = self.fetch_resources_from_path(
             "subscriptions", pagination_cursor=subscription_pagination_cursor
         )
         return parent_resources, all_slices_cursor
 
-    def fetch_after_cursor(self, initial_cursor: SubscriptionCostsCursor) -> AbstractResourceFetchResponse[SubscriptionCostsCursor]:
-        response = SubscriptionCostsFetchResponse.init_with_cursor(initial_cursor, resource_config=self.resource_config)
+    def fetch_after_cursor(
+        self, initial_cursor: SubscriptionCostsCursor
+    ) -> AbstractResourceFetchResponse[SubscriptionCostsCursor]:
+        response = SubscriptionCostsFetchResponse.init_with_cursor(
+            initial_cursor, resource_config=self.resource_config
+        )
         timeframe_start = initial_cursor.current_timeframe_start
         timeframe_end = initial_cursor.current_timeframe_end
 
@@ -932,7 +1138,7 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
             initial_cursor.current_subscriptions_pagination_cursor
         )
         for subscription in subscriptions:
-            subscription_id = subscription['id']
+            subscription_id = subscription["id"]
             if subscription["status"] == "upcoming":
                 logger.info("Skipping upcoming subscription: %s", subscription_id)
                 continue
@@ -961,7 +1167,9 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
                         total=price_cost["total"],
                         price_id=price_cost["price"]["id"],
                         price_name=price_cost["price"]["name"],
-                        billable_metric_id=price_cost["price"]["billable_metric"]["id"] if price_cost["price"]["billable_metric"] is not None else None,
+                        billable_metric_id=price_cost["price"]["billable_metric"]["id"]
+                        if price_cost["price"]["billable_metric"] is not None
+                        else None,
                         grouped_costs_json=json.dumps(price_cost["price_groups"]),
                     )
                     response.add_resource(psc)
@@ -969,7 +1177,10 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
         # This will advance the timeframe if we're done with all subscriptions;
         # otherwise it will just update the pagination cursor and we'll continue on the
         # same timeframe
-        response.update_cursor_state(subscriptions_cursor=subscription_pagination_cursor, timeframe_end=timeframe_end)
+        response.update_cursor_state(
+            subscriptions_cursor=subscription_pagination_cursor,
+            timeframe_end=timeframe_end,
+        )
 
         return response
 
@@ -1033,6 +1244,18 @@ credit_ledger_entry_resource_config = NestedResourceConfig(
     page_size=LEDGER_ENTRIES_PAGE_SIZE,
 )
 
+subscription_costs_resource_config = BaseResourceConfig(
+    primary_key_list=[
+        "subscription_id",
+        "timeframe_start",
+        "timeframe_end",
+        "price_id",
+    ],
+    resultant_schema_key="subscription_costs",
+    maybe_fetcher_type=SubscriptionCostsFetcher,
+    page_size=SUBSCRIPTION_COSTS_PAGE_SIZE,
+)
+
 RESOURCE_TO_RESOURCE_CONFIG: Dict[str, BaseResourceConfig] = {
     "customer": customer_resource_config,
     "plan": plan_resource_config,
@@ -1040,11 +1263,7 @@ RESOURCE_TO_RESOURCE_CONFIG: Dict[str, BaseResourceConfig] = {
     "subscription": subscription_resource_config,
     "subscription_version": subscription_version_resource_config,
     "credit_ledger_entry": credit_ledger_entry_resource_config,
-    "subscription_costs": BaseResourceConfig(
-        primary_key_list=["subscription_id", "timeframe_start", "timeframe_end", "price_id"],
-        resultant_schema_key="subscription_costs",
-        maybe_fetcher_type=SubscriptionCostsFetcher,
-    ),
+    "subscription_costs": subscription_costs_resource_config,
 }
 
 
@@ -1064,11 +1283,13 @@ def lambda_handler(req, context):
     excluded_resources_str = secrets.get("excluded_resources", None)
     excluded_resources = []
     if excluded_resources_str:
-        excluded_resources = [x.strip() for x in excluded_resources_str.split(',')]
+        excluded_resources = [x.strip() for x in excluded_resources_str.split(",")]
         logger.info(f"Excluding resources: {excluded_resources}")
         for resource in excluded_resources:
             if resource not in RESOURCE_TO_RESOURCE_CONFIG.keys():
-                raise Exception(f"Excluded resource {resource} is not a valid resource name.")
+                raise Exception(
+                    f"Excluded resource {resource} is not a valid resource name."
+                )
 
     has_more = False
     collected_resources: Dict = {}
@@ -1091,16 +1312,26 @@ def lambda_handler(req, context):
             is_paginated_invocation = True
             incomplete_pagination_resources.add(resource)
 
-    streams_to_invoke = incomplete_pagination_resources if is_paginated_invocation else set(RESOURCE_TO_RESOURCE_CONFIG.keys())
+    streams_to_invoke = (
+        incomplete_pagination_resources
+        if is_paginated_invocation
+        else set(RESOURCE_TO_RESOURCE_CONFIG.keys())
+    )
     for resource, resource_config in RESOURCE_TO_RESOURCE_CONFIG.items():
         if resource not in streams_to_invoke:
-            logger.info(f"Skipping {resource} resource because this is a paginated invocation, and this resource is exhausted.")
+            logger.info(
+                f"Skipping {resource} resource because this is a paginated invocation, and this resource is exhausted."
+            )
             continue
         if resource in excluded_resources:
-            logger.info(f"Skipping {resource} resource because it is specified to be excluded.")
+            logger.info(
+                f"Skipping {resource} resource because it is specified to be excluded."
+            )
             continue
         fetcher_type = fetcher_for_resource_config(resource_config)
-        fetcher: AbstractResourceFetcher = fetcher_type(authorization_header=authorization_header, resource_config=resource_config)
+        fetcher: AbstractResourceFetcher = fetcher_type(
+            authorization_header=authorization_header, resource_config=resource_config
+        )
         fetch_response: AbstractResourceFetchResponse = fetcher.fetch_all(
             maybe_existing_state_cursor=state.state_cursor_for_resource(resource)
         )
@@ -1110,9 +1341,13 @@ def lambda_handler(req, context):
         # resources for the unexhausted streams.
         if not fetch_response.get_updated_state().pagination_exhausted():
             has_more = True
-        output_resources = collected_resources.get(resource_config.resultant_schema_key, [])
+        output_resources = collected_resources.get(
+            resource_config.resultant_schema_key, []
+        )
         all_resources = list(fetch_response.all_resources())
-        logger.info(f"Collected {len(all_resources)} {resource_config.resultant_schema_key} resources.")
+        logger.info(
+            f"Collected {len(all_resources)} {resource_config.resultant_schema_key} resources."
+        )
         output_resources.extend(all_resources)
         collected_resources[resource_config.resultant_schema_key] = output_resources
         state.set_for_resource(resource, fetch_response.get_updated_state())
@@ -1121,13 +1356,21 @@ def lambda_handler(req, context):
     maybe_s3_file = req.get("file")
     s3_sync = False
 
-    function_response = FivetranFunctionResponse(state=state, insert=collected_resources, has_more=has_more)
+    function_response = FivetranFunctionResponse(
+        state=state, insert=collected_resources, has_more=has_more
+    )
 
     if maybe_s3_bucket and maybe_s3_file:
         s3_sync = True
         # Write the output to s3
         s3_client.put_object(
-            Body=(bytes(json.dumps(function_response.serialize_output_to_s3()).encode("UTF-8"))),
+            Body=(
+                bytes(
+                    json.dumps(function_response.serialize_output_to_s3()).encode(
+                        "UTF-8"
+                    )
+                )
+            ),
             Bucket=maybe_s3_bucket,
             Key=maybe_s3_file,
         )
