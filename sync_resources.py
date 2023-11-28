@@ -1,6 +1,7 @@
 import json
 import logging
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import (
@@ -37,6 +38,7 @@ GRACE_PERIOD_BUFFER_DAYS = 2
 
 ## Subscription Costs
 SUBSCRIPTION_COSTS_PAGE_SIZE = DEFAULT_PAGE_SIZE
+SUBSCRIPTION_COSTS_PARALLEL_REQUESTS = 1
 
 ## Ledger Entries
 LEDGER_ENTRIES_PAGE_SIZE = 300
@@ -1137,11 +1139,15 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
         (subscriptions, subscription_pagination_cursor) = self.fetch_subscriptions(
             initial_cursor.current_subscriptions_pagination_cursor
         )
-        for subscription in subscriptions:
+
+        def fetch_costs_for_subscription(
+            subscription,
+        ) -> List[PeriodicSubscriptionCost]:
             subscription_id = subscription["id"]
             if subscription["status"] == "upcoming":
                 logger.info("Skipping upcoming subscription: %s", subscription_id)
-                continue
+                return []
+
             one_month_costs = req_session.get(
                 BASE_ORB_API_URL + f"subscriptions/{subscription_id}/costs",
                 headers=self.auth_header,
@@ -1151,9 +1157,12 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
                     "view_mode": "periodic",
                 },
             ).json()
+
             daily_costs = one_month_costs.get("data")
             if daily_costs is None:
-                continue
+                return []
+
+            subscription_costs: List[PeriodicSubscriptionCost] = []
             for cost in daily_costs:
                 timeframe_start_str = cost["timeframe_start"]
                 timeframe_end_str = cost["timeframe_end"]
@@ -1172,7 +1181,16 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
                         else None,
                         grouped_costs_json=json.dumps(price_cost["price_groups"]),
                     )
-                    response.add_resource(psc)
+                    subscription_costs.append(psc)
+
+            return subscription_costs
+
+        with ThreadPoolExecutor(max_workers=SUBSCRIPTION_COSTS_PARALLEL_REQUESTS) as p:
+            iterator = p.map(fetch_costs_for_subscription, subscriptions)
+
+        for resources in iterator:
+            for resource in resources:
+                response.add_resource(resource)
 
         # This will advance the timeframe if we're done with all subscriptions;
         # otherwise it will just update the pagination cursor and we'll continue on the
