@@ -348,13 +348,9 @@ class SubscriptionCostsCursor(AbstractCursor):
 
     def pagination_exhausted(self) -> bool:
         """
-        Pagination is exhausted if we have < 1 day in our timeframe.
+        Pagination is exhausted if we no longer have a cursor for paginating.
         """
-        is_exhausted = (
-            self.current_subscriptions_pagination_cursor is None
-            and (self.current_timeframe_end - self.current_timeframe_start).days < 1
-        )
-        return is_exhausted
+        return self.current_subscriptions_pagination_cursor is None
 
 
 T = TypeVar("T", bound=AbstractCursor)
