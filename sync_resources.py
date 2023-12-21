@@ -38,7 +38,6 @@ GRACE_PERIOD_BUFFER_DAYS = 2
 
 ## Subscription Costs
 SUBSCRIPTION_COSTS_PAGE_SIZE = DEFAULT_PAGE_SIZE
-SUBSCRIPTION_COSTS_PARALLEL_REQUESTS = 1
 
 ## Ledger Entries
 LEDGER_ENTRIES_PAGE_SIZE = 300
@@ -374,9 +373,14 @@ class AbstractResourceFetchResponse(ABC, Generic[T]):
 
 
 class AbstractResourceFetcher(ABC, Generic[T]):
-    def __init__(self, authorization_header, resource_config):
-        self.auth_header = authorization_header
+    def __init__(self, secrets, resource_config):
         self.resource_config = resource_config
+        self.secrets = secrets
+
+    @property
+    def auth_header(self):
+        orb_api_key = self.secrets.get("orb_api_key")
+        return {"Authorization": f"Bearer {orb_api_key}"}
 
     @abstractmethod
     def fetch_after_cursor(self, initial_cursor: T) -> AbstractResourceFetchResponse[T]:
@@ -975,7 +979,7 @@ class NestedResourceFetcher(AbstractResourceFetcher[CursorWithSlices]):
                 continue
             # Only support direct fetchers for now
             slice_resource_fetcher = DirectResourceFetcher(
-                self.auth_header, self.resource_config.slice_resource_config(slice_id)
+                self.secrets, self.resource_config.slice_resource_config(slice_id)
             )
             fetch_response: ResourceFetchResponse = (
                 slice_resource_fetcher.fetch_after_cursor(slice_cursor)
@@ -1115,6 +1119,9 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
     The size of the timeframe is determined by the `COSTS_TIMEFRAME_WINDOW` constant.
     """
 
+    def parallel_requests(self):
+        return self.secrets.get("subscription_costs_parallel_requests", 1)
+
     def fetch_subscriptions(
         self, subscription_pagination_cursor: Optional[str]
     ) -> Tuple[List[Any], SimplePaginationCursor]:
@@ -1181,7 +1188,7 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
 
             return subscription_costs
 
-        with ThreadPoolExecutor(max_workers=SUBSCRIPTION_COSTS_PARALLEL_REQUESTS) as p:
+        with ThreadPoolExecutor(max_workers=self.parallel_requests()) as p:
             iterator = p.map(fetch_costs_for_subscription, subscriptions)
 
         for resources in iterator:
@@ -1344,7 +1351,7 @@ def lambda_handler(req, context):
             continue
         fetcher_type = fetcher_for_resource_config(resource_config)
         fetcher: AbstractResourceFetcher = fetcher_type(
-            authorization_header=authorization_header, resource_config=resource_config
+            secrets=secrets, resource_config=resource_config
         )
         fetch_response: AbstractResourceFetchResponse = fetcher.fetch_all(
             maybe_existing_state_cursor=state.state_cursor_for_resource(resource)
