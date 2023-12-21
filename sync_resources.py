@@ -979,7 +979,7 @@ class NestedResourceFetcher(AbstractResourceFetcher[CursorWithSlices]):
                 continue
             # Only support direct fetchers for now
             slice_resource_fetcher = DirectResourceFetcher(
-                self.auth_header, self.resource_config.slice_resource_config(slice_id)
+                self.secrets, self.resource_config.slice_resource_config(slice_id)
             )
             fetch_response: ResourceFetchResponse = (
                 slice_resource_fetcher.fetch_after_cursor(slice_cursor)
