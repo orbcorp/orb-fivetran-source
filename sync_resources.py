@@ -754,6 +754,7 @@ class PeriodicSubscriptionCost:
     subscription_id: str
     timeframe_start: str
     timeframe_end: str
+    quantity: Decimal
     subtotal: Decimal
     total: Decimal
     price_id: str
@@ -766,6 +767,7 @@ class PeriodicSubscriptionCost:
             "subscription_id": self.subscription_id,
             "timeframe_start": self.timeframe_start,
             "timeframe_end": self.timeframe_end,
+            "quantity": self.quantity,
             "subtotal": self.subtotal,
             "total": self.total,
             "price_id": self.price_id,
@@ -1175,6 +1177,7 @@ class SubscriptionCostsFetcher(AbstractResourceFetcher[SubscriptionCostsCursor])
                         subscription_id=subscription_id,
                         timeframe_start=timeframe_start_str,
                         timeframe_end=timeframe_end_str,
+                        quantity=price_cost["quantity"],
                         subtotal=price_cost["subtotal"],
                         total=price_cost["total"],
                         price_id=price_cost["price"]["id"],
