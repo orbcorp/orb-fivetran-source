@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
@@ -652,6 +653,9 @@ class FivetranFunctionResponse:
         }
     )
     has_more: bool = False
+    softDelete: List = field(
+        default_factory = lambda: json.loads(os.environ.get("SOFT_DELETE_SCHEMAS_JSON", "[]"))
+    )
 
     def as_dict(self, s3_sync=False):
         if s3_sync:
@@ -659,6 +663,7 @@ class FivetranFunctionResponse:
                 "state": self.state.as_dict(),
                 "schema": self.schema,
                 "hasMore": self.has_more,
+                "softDelete": self.softDelete,
             }
         else:
             return {
@@ -667,6 +672,7 @@ class FivetranFunctionResponse:
                 "delete": {},
                 "schema": self.schema,
                 "hasMore": self.has_more,
+                "softDelete": self.softDelete,
             }
 
     def serialize_output_to_s3(self):
