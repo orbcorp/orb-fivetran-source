@@ -35,7 +35,7 @@ MAX_PAGES_PER_SYNC = 10
 ## Only applies to costs
 MIN_COSTS_START_TIME = pendulum.datetime(2023, 1, 1, 0, 0, 0, tz="UTC")
 COSTS_TIMEFRAME_WINDOW = 10
-GRACE_PERIOD_BUFFER_DAYS = 2
+GRACE_PERIOD_BUFFER_HOURS = int(os.environ.get("GRACE_PERIOD_BUFFER_HOURS", "48"))
 
 ## Subscription Costs
 SUBSCRIPTION_COSTS_PAGE_SIZE = DEFAULT_PAGE_SIZE
@@ -306,7 +306,7 @@ class SubscriptionCostsCursor(AbstractCursor):
     ) -> pendulum.DateTime:
         return min(
             start_time.add(days=COSTS_TIMEFRAME_WINDOW),
-            pendulum.now("UTC").subtract(days=GRACE_PERIOD_BUFFER_DAYS),
+            pendulum.now("UTC").subtract(hours=GRACE_PERIOD_BUFFER_HOURS),
         )
 
     @staticmethod
