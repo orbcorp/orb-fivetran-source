@@ -1331,6 +1331,8 @@ def lambda_handler(req, context):
     incomplete_pagination_resources = set()
     is_paginated_invocation = False
     for resource, resource_config in RESOURCE_TO_RESOURCE_CONFIG.items():
+        if resource in excluded_resources:
+            continue
         state_cursor = state.state_cursor_for_resource(resource)
         if not state_cursor.pagination_exhausted():
             is_paginated_invocation = True
